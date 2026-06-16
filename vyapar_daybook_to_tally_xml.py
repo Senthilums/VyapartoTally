@@ -277,11 +277,21 @@ def build_date_lookup(item_rows):
             lookup[item.ref_no] = item.date
 
     return lookup
+
+
+def default_daybook_date(date_by_ref_no: Dict[str, str]) -> str:
+    dates = sorted({date for date in date_by_ref_no.values() if date})
+    if dates:
+        return dates[0]
+    fallback = tally_date(None)
+    LOGGER.warning("No item dates found; using %s for daybook rows without dates", fallback)
+    return fallback
     
 
 def read_daybook(path: Path , date_by_ref_no=None) -> List[DaybookRow]:
     LOGGER.info("Reading Daybook: %s", path)
     date_by_ref_no = date_by_ref_no or {}
+    fallback_date = default_daybook_date(date_by_ref_no)
     wb = load_workbook(path, data_only=True)
     ws, header_row, headers = find_sheet_and_header(wb, ["name", "ref no", "type", "payment type", "total", "money in", "money out"])
     LOGGER.info("Daybook sheet: %s | header row: %s", ws.title, header_row)
@@ -292,7 +302,7 @@ def read_daybook(path: Path , date_by_ref_no=None) -> List[DaybookRow]:
         row_type = clean_text(ws.cell(r, headers["type"]).value)
         party = clean_text(ws.cell(r, headers["name"]).value)
         ref_no = clean_text(ws.cell(r, headers["ref no"]).value)
-        date_value = date_by_ref_no.get(ref_no)
+        date_value = date_by_ref_no.get(ref_no) or fallback_date
         ##date=tally_date(ws.cell(r, headers.get("date", 1)).value)
         if not row_type and not party and not ref_no:
             continue
@@ -510,8 +520,9 @@ def create_receipt(request_data: ET.Element, row: DaybookRow, amount: Optional[f
     no = f"{prefix}-{row.ref_no or row.party[:12]}".replace(" ", "-")
     voucher = create_voucher(request_data, "Receipt", row.date, no, row.party, row.ref_no or no)
     bank_or_cash = payment_ledger(row.payment_type)
-    ledger_entry(voucher, bank_or_cash, amt, "No")
-    ledger_entry(voucher, row.party, -amt, "Yes", "Yes", row.ref_no or no, "Agst Ref" if row.ref_no else "New Ref")
+    # Debit cash/bank and credit the party for receipts.
+    ledger_entry(voucher, bank_or_cash, -amt, "Yes")
+    ledger_entry(voucher, row.party, amt, "No", "Yes", row.ref_no or no, "Agst Ref" if row.ref_no else "New Ref")
 
 
 def create_purchase(request_data: ET.Element, row: DaybookRow, items_by_ref: Dict[str, List[ItemRow]]) -> None:
