@@ -115,6 +115,8 @@ def setup_logger(log_dir: Path) -> logging.Logger:
 
 LOGGER = setup_logger(Path("logs"))
 
+ROUND_OFF_WARNING_THRESHOLD = 1.0
+
 # -----------------------------
 # DATA MODELS
 # -----------------------------
@@ -458,6 +460,21 @@ def ledger_entry(parent: ET.Element, ledger_name: str, amount: float, is_deemed_
         add_bill_allocation(entry, bill_ref, amount, bill_type)
 
 
+def add_round_off_entry(voucher: ET.Element, amount: float, voucher_no: str) -> None:
+    amount = round(amount, 2)
+    if abs(amount) < 0.01:
+        return
+    if abs(amount) >= ROUND_OFF_WARNING_THRESHOLD:
+        LOGGER.warning("Large sales round-off adjustment | voucher=%s | amount=%.2f", voucher_no, amount)
+    ledger_entry(
+        voucher,
+        LEDGERS["round_off"],
+        amount,
+        "Yes" if amount < 0 else "No",
+        tag_name="LEDGERENTRIES.LIST",
+    )
+
+
 def inventory_entry(parent: ET.Element, item: ItemRow, sales_ledger: str, is_sales: bool = True) -> None:
     inv = ET.SubElement(parent, "ALLINVENTORYENTRIES.LIST")
     amount = item.amount if is_sales else -item.amount
@@ -507,8 +524,11 @@ def create_sales(request_data: ET.Element, row: DaybookRow, items_by_ref: Dict[s
     ledger_entry(voucher, row.party, -amount, "Yes", is_party="Yes", bill_ref=row.ref_no, bill_type="New Ref",tag_name="LEDGERENTRIES.LIST")
     items = items_by_ref.get(row.ref_no, [])
     if items:
+        item_total = 0.0
         for item in items:
+            item_total += item.amount
             inventory_entry(voucher, item, LEDGERS["sales"], is_sales=True)
+        add_round_off_entry(voucher, amount - item_total, row.ref_no)
     else:
         ledger_entry(voucher, LEDGERS["sales"], amount, "No")
 
