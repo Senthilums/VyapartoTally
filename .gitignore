@@ -1,0 +1,6 @@
+logs/
+output/
+.env
+.env.local
+*.xlsx
+*.xml
