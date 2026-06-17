@@ -32,7 +32,7 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 import xml.etree.ElementTree as ET
@@ -95,6 +95,8 @@ TYPE_KEYWORDS = {
 # -----------------------------
 def setup_logger(log_dir: Path) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     logger = logging.getLogger("vyapar_daybook_to_tally")
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
@@ -116,6 +118,7 @@ def setup_logger(log_dir: Path) -> logging.Logger:
 LOGGER = setup_logger(Path("logs"))
 
 ROUND_OFF_WARNING_THRESHOLD = 1.0
+MAX_DATA_AGE_DAYS = 3
 
 # -----------------------------
 # DATA MODELS
@@ -194,6 +197,34 @@ def tally_date(value) -> str:
             continue
     LOGGER.warning("Could not parse date %r; using today", value)
     return datetime.today().strftime("%Y%m%d")
+
+
+def parse_tally_date(value: str) -> date:
+    return datetime.strptime(value, "%Y%m%d").date()
+
+
+def parse_daybook_filename_date(path: Path) -> Optional[str]:
+    match = re.search(r"daybook_(\d{2})_(\d{2})_(\d{2})_to_(\d{2})_(\d{2})_(\d{2})", path.stem, re.IGNORECASE)
+    if not match:
+        return None
+    day, month, year = match.group(4), match.group(5), match.group(6)
+    return tally_date(f"{day}/{month}/20{year}")
+
+
+def validate_data_age(rows: List["DaybookRow"], max_age_days: int) -> None:
+    if max_age_days <= 0:
+        LOGGER.info("Data age validation disabled")
+        return
+    today = date.today()
+    oldest_allowed = today.toordinal() - max_age_days
+    old_dates = sorted({row.date for row in rows if row.date and parse_tally_date(row.date).toordinal() < oldest_allowed})
+    if old_dates:
+        formatted = ", ".join(datetime.strptime(d, "%Y%m%d").strftime("%d-%m-%Y") for d in old_dates)
+        raise ValueError(
+            f"Data date is too old for XML generation: {formatted}. "
+            f"Allowed window is the past {max_age_days} days. "
+            "Change MAX_DATA_AGE_DAYS or use --max-data-age-days if you need to generate older data."
+        )
 
 
 def classify_type(row_type: str) -> str:
@@ -281,7 +312,10 @@ def build_date_lookup(item_rows):
     return lookup
 
 
-def default_daybook_date(date_by_ref_no: Dict[str, str]) -> str:
+def default_daybook_date(input_path: Path, date_by_ref_no: Dict[str, str]) -> str:
+    filename_date = parse_daybook_filename_date(input_path)
+    if filename_date:
+        return filename_date
     dates = sorted({date for date in date_by_ref_no.values() if date})
     if dates:
         return dates[0]
@@ -293,7 +327,7 @@ def default_daybook_date(date_by_ref_no: Dict[str, str]) -> str:
 def read_daybook(path: Path , date_by_ref_no=None) -> List[DaybookRow]:
     LOGGER.info("Reading Daybook: %s", path)
     date_by_ref_no = date_by_ref_no or {}
-    fallback_date = default_daybook_date(date_by_ref_no)
+    fallback_date = default_daybook_date(path, date_by_ref_no)
     wb = load_workbook(path, data_only=True)
     ws, header_row, headers = find_sheet_and_header(wb, ["name", "ref no", "type", "payment type", "total", "money in", "money out"])
     LOGGER.info("Daybook sheet: %s | header row: %s", ws.title, header_row)
@@ -640,6 +674,10 @@ def combine_xml(master_env: ET.Element, voucher_env: ET.Element, output: Path) -
             request_data.append(msg)
     write_xml(envelope, output)
 
+
+def default_output_path(input_path: Path, output_dir: Path) -> Path:
+    return output_dir / f"{input_path.stem}_tally_import.xml"
+
 # -----------------------------
 # MAIN
 # -----------------------------
@@ -648,17 +686,24 @@ def main() -> None:
         
     parser = argparse.ArgumentParser(description="Generate Tally import XML from Vyapar Day Book Excel")
     parser.add_argument("--input", required=True, help="Vyapar Daybook Excel file path")
-    parser.add_argument("--output", default="output/final_combined.xml", help="Combined Tally XML output path")
+    parser.add_argument("--output", help="Combined Tally XML output path")
     parser.add_argument("--company", default=COMPANY_NAME, help="Tally company name")
     parser.add_argument("--output-dir", default="output", help="Output folder")
+    parser.add_argument(
+        "--max-data-age-days",
+        type=int,
+        default=MAX_DATA_AGE_DAYS,
+        help="Block XML generation when any voucher date is older than this many days. Use 0 to disable.",
+    )
     args = parser.parse_args()
     COMPANY_NAME = args.company
    
     input_path = Path(args.input)
     output_dir = Path(args.output_dir)
-    masters_path = output_dir / "01_masters.xml"
-    vouchers_path = output_dir / "02_vouchers.xml"
-    combined_path = Path(args.output)
+    output_prefix = input_path.stem
+    masters_path = output_dir / f"{output_prefix}_01_masters.xml"
+    vouchers_path = output_dir / f"{output_prefix}_02_vouchers.xml"
+    combined_path = Path(args.output) if args.output else default_output_path(input_path, output_dir)
 
     LOGGER.info("Starting Vyapar Daybook to Tally XML")
     LOGGER.info("Input: %s", input_path)
@@ -669,6 +714,11 @@ def main() -> None:
     items = read_items(input_path)
     date_by_ref_no = build_date_lookup(items)
     rows = read_daybook(input_path, date_by_ref_no)
+    try:
+        validate_data_age(rows, args.max_data_age_days)
+    except ValueError as exc:
+        LOGGER.error(str(exc))
+        sys.exit(1)
 
     master_env, master_stats = build_masters(rows, items, masters_path)
     voucher_env, voucher_stats = build_vouchers(rows, items, vouchers_path)
