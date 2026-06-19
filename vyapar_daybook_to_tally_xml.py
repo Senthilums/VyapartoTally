@@ -119,6 +119,7 @@ LOGGER = setup_logger(Path("logs"))
 
 ROUND_OFF_WARNING_THRESHOLD = 1.0
 MAX_DATA_AGE_DAYS = 3
+REQUIRE_ITEM_DETAILS_FOR_SALES = True
 
 # -----------------------------
 # DATA MODELS
@@ -224,6 +225,26 @@ def validate_data_age(rows: List["DaybookRow"], max_age_days: int) -> None:
             f"Data date is too old for XML generation: {formatted}. "
             f"Allowed window is the past {max_age_days} days. "
             "Change MAX_DATA_AGE_DAYS or use --max-data-age-days if you need to generate older data."
+        )
+
+
+def validate_sales_item_details(rows: List["DaybookRow"], items: List["ItemRow"], require_items: bool) -> None:
+    if not require_items:
+        LOGGER.info("Accounting-only Sales vouchers allowed")
+        return
+    sales_refs = {row.ref_no for row in rows if row.kind == "sales" and row.ref_no}
+    if not sales_refs:
+        return
+    item_refs = {item.ref_no for item in items if item.ref_no}
+    missing_refs = sorted(sales_refs - item_refs)
+    if missing_refs:
+        sample = ", ".join(missing_refs[:10])
+        if len(missing_refs) > 10:
+            sample += ", ..."
+        raise ValueError(
+            f"Item Details are missing for {len(missing_refs)} Sales voucher(s): {sample}. "
+            "Export/include the Vyapar Item Details sheet, pass --items-input with that workbook, "
+            "or use --allow-accounting-only-sales if you intentionally want ledger-only Sales vouchers."
         )
 
 
@@ -686,9 +707,15 @@ def main() -> None:
         
     parser = argparse.ArgumentParser(description="Generate Tally import XML from Vyapar Day Book Excel")
     parser.add_argument("--input", required=True, help="Vyapar Daybook Excel file path")
+    parser.add_argument("--items-input", help="Excel file containing Vyapar Item Details sheet. Defaults to --input.")
     parser.add_argument("--output", help="Combined Tally XML output path")
     parser.add_argument("--company", default=COMPANY_NAME, help="Tally company name")
     parser.add_argument("--output-dir", default="output", help="Output folder")
+    parser.add_argument(
+        "--allow-accounting-only-sales",
+        action="store_true",
+        help="Allow Sales vouchers without Item Details inventory lines.",
+    )
     parser.add_argument(
         "--max-data-age-days",
         type=int,
@@ -699,6 +726,7 @@ def main() -> None:
     COMPANY_NAME = args.company
    
     input_path = Path(args.input)
+    items_input_path = Path(args.items_input) if args.items_input else input_path
     output_dir = Path(args.output_dir)
     output_prefix = input_path.stem
     masters_path = output_dir / f"{output_prefix}_01_masters.xml"
@@ -707,15 +735,17 @@ def main() -> None:
 
     LOGGER.info("Starting Vyapar Daybook to Tally XML")
     LOGGER.info("Input: %s", input_path)
+    LOGGER.info("Item details input: %s", items_input_path)
     LOGGER.info("Company: %s", COMPANY_NAME)
 
     
     
-    items = read_items(input_path)
+    items = read_items(items_input_path)
     date_by_ref_no = build_date_lookup(items)
     rows = read_daybook(input_path, date_by_ref_no)
     try:
         validate_data_age(rows, args.max_data_age_days)
+        validate_sales_item_details(rows, items, REQUIRE_ITEM_DETAILS_FOR_SALES and not args.allow_accounting_only_sales)
     except ValueError as exc:
         LOGGER.error(str(exc))
         sys.exit(1)
