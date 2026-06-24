@@ -595,9 +595,9 @@ def create_receipt(request_data: ET.Element, row: DaybookRow, amount: Optional[f
     no = f"{prefix}-{row.ref_no or row.party[:12]}".replace(" ", "-")
     voucher = create_voucher(request_data, "Receipt", row.date, no, row.party, row.ref_no or no)
     bank_or_cash = payment_ledger(row.payment_type)
-    # Debit cash/bank and credit the party for receipts.
-    ledger_entry(voucher, bank_or_cash, -amt, "Yes")
-    ledger_entry(voucher, row.party, amt, "No", "Yes", row.ref_no or no, "Agst Ref" if row.ref_no else "New Ref")
+    # Tally Receipt convention: party appears on the Credit side.
+    ledger_entry(voucher, bank_or_cash, amt, "No")
+    ledger_entry(voucher, row.party, -amt, "Yes", "Yes", row.ref_no or no, "Agst Ref" if row.ref_no else "New Ref")
 
 
 def create_purchase(request_data: ET.Element, row: DaybookRow, items_by_ref: Dict[str, List[ItemRow]]) -> None:
@@ -622,9 +622,9 @@ def create_payment(request_data: ET.Element, row: DaybookRow, amount: Optional[f
     no = f"{prefix}-{row.ref_no or row.party[:12]}-{row.date}".replace(" ", "-")
     voucher = create_voucher(request_data, "Payment", row.date, no, row.party, row.ref_no or no)
     bank_or_cash = payment_ledger(row.payment_type)
-    # Debit expense/supplier, credit cash/bank
-    ledger_entry(voucher, row.party, amt, "No", "Yes" if row.ref_no else "No", row.ref_no or no, "Agst Ref" if row.ref_no else "New Ref")
-    ledger_entry(voucher, bank_or_cash, -amt, "Yes")
+    # Tally Payment convention: expense/supplier is Debit and cash/bank is Credit.
+    ledger_entry(voucher, row.party, -amt, "Yes", "Yes" if row.ref_no else "No", row.ref_no or no, "Agst Ref" if row.ref_no else "New Ref")
+    ledger_entry(voucher, bank_or_cash, amt, "No")
 
 
 def create_credit_note(request_data: ET.Element, row: DaybookRow) -> None:
