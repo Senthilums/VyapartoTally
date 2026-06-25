@@ -1,5 +1,9 @@
+dist/
 logs/
 output/
+build/
+__pycache__/
+.venv/
 .env
 .env.local
 *.xlsx

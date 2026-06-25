@@ -118,7 +118,7 @@ def setup_logger(log_dir: Path) -> logging.Logger:
 LOGGER = setup_logger(Path("logs"))
 
 ROUND_OFF_WARNING_THRESHOLD = 1.0
-MAX_DATA_AGE_DAYS = 3
+MAX_DATA_AGE_DAYS = 30
 REQUIRE_ITEM_DETAILS_FOR_SALES = True
 
 # -----------------------------
@@ -702,36 +702,60 @@ def default_output_path(input_path: Path, output_dir: Path) -> Path:
 # -----------------------------
 # MAIN
 # -----------------------------
-def main() -> None:
+def main(
+    input_file=None,
+    items_input_file=None,
+    output_file=None,
+    company=None,
+    output_dir="output",
+    allow_accounting_only_sales=False,
+    max_data_age_days=MAX_DATA_AGE_DAYS,
+):
     global COMPANY_NAME
+    if input_file is None:
+        parser = argparse.ArgumentParser(description="Generate Tally import XML from Vyapar Day Book Excel")
+        parser.add_argument("--input", required=True, help="Vyapar Daybook Excel file path")
+        parser.add_argument("--items-input", help="Excel file containing Vyapar Item Details sheet. Defaults to --input.")
+        parser.add_argument("--output", help="Combined Tally XML output path")
+        parser.add_argument("--company", default=COMPANY_NAME, help="Tally company name")
+        parser.add_argument("--output-dir", default="output", help="Output folder")
+        parser.add_argument(
+            "--allow-accounting-only-sales",
+            action="store_true",
+            help="Allow Sales vouchers without Item Details inventory lines.",
+        )
+        parser.add_argument(
+            "--max-data-age-days",
+            type=int,
+            default=MAX_DATA_AGE_DAYS,
+            help="Block XML generation when any voucher date is older than this many days. Use 0 to disable.",
+        )
+        args = parser.parse_args()
         
-    parser = argparse.ArgumentParser(description="Generate Tally import XML from Vyapar Day Book Excel")
-    parser.add_argument("--input", required=True, help="Vyapar Daybook Excel file path")
-    parser.add_argument("--items-input", help="Excel file containing Vyapar Item Details sheet. Defaults to --input.")
-    parser.add_argument("--output", help="Combined Tally XML output path")
-    parser.add_argument("--company", default=COMPANY_NAME, help="Tally company name")
-    parser.add_argument("--output-dir", default="output", help="Output folder")
-    parser.add_argument(
-        "--allow-accounting-only-sales",
-        action="store_true",
-        help="Allow Sales vouchers without Item Details inventory lines.",
-    )
-    parser.add_argument(
-        "--max-data-age-days",
-        type=int,
-        default=MAX_DATA_AGE_DAYS,
-        help="Block XML generation when any voucher date is older than this many days. Use 0 to disable.",
-    )
-    args = parser.parse_args()
-    COMPANY_NAME = args.company
    
-    input_path = Path(args.input)
-    items_input_path = Path(args.items_input) if args.items_input else input_path
-    output_dir = Path(args.output_dir)
+        input_file = args.input
+        items_input_file = args.items_input
+        output_file = args.output
+        company = args.company
+        output_dir = args.output_dir
+        allow_accounting_only_sales = args.allow_accounting_only_sales
+        max_data_age_days = args.max_data_age_days
+
+    if company is None:
+        company = COMPANY_NAME
+    
+    COMPANY_NAME = company
+
+    input_path = Path(input_file)
+    items_input_path = Path(items_input_file) if items_input_file else input_path
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     output_prefix = input_path.stem
     masters_path = output_dir / f"{output_prefix}_01_masters.xml"
     vouchers_path = output_dir / f"{output_prefix}_02_vouchers.xml"
-    combined_path = Path(args.output) if args.output else default_output_path(input_path, output_dir)
+    combined_path = output_dir / f"{output_prefix}_03_combined.xml"
+    ##combined_path = Path(output_dir) if output_dir else default_output_path(input_path, output_dir)
 
     LOGGER.info("Starting Vyapar Daybook to Tally XML")
     LOGGER.info("Input: %s", input_path)
@@ -744,8 +768,8 @@ def main() -> None:
     date_by_ref_no = build_date_lookup(items)
     rows = read_daybook(input_path, date_by_ref_no)
     try:
-        validate_data_age(rows, args.max_data_age_days)
-        validate_sales_item_details(rows, items, REQUIRE_ITEM_DETAILS_FOR_SALES and not args.allow_accounting_only_sales)
+        validate_data_age(rows, max_data_age_days)
+        validate_sales_item_details(rows, items, REQUIRE_ITEM_DETAILS_FOR_SALES and not allow_accounting_only_sales)
     except ValueError as exc:
         LOGGER.error(str(exc))
         sys.exit(1)
