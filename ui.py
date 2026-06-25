@@ -16,15 +16,6 @@ def browse_input():
             output_var.set(path.rsplit("/", 1)[0] if "/" in path else path.rsplit("\\", 1)[0])
 
 
-def browse_items_input():
-    path = filedialog.askopenfilename(
-        title="Select Item Details Excel",
-        filetypes=[("Excel Files", "*.xlsx *.xls")],
-    )
-    if path:
-        items_input_var.set(path)
-
-
 def browse_output():
     path = filedialog.askdirectory(title="Select Output Folder")
     if path:
@@ -45,7 +36,6 @@ def run_generate():
     try:
         result = generate_xml(
             input_file=input_var.get().strip(),
-            items_input_file=items_input_var.get().strip(),
             output_folder=output_var.get().strip(),
             generate_masters=masters_var.get(),
             generate_vouchers=vouchers_var.get(),
@@ -55,7 +45,6 @@ def run_generate():
             purchases=purchases_var.get(),
             payments=payments_var.get(),
             notes=notes_var.get(),
-            allow_accounting_only_sales=allow_accounting_only_sales_var.get(),
             max_data_age_days=selected_age_days(),
         )
         files = "\n".join(result.get("files", []))
@@ -69,11 +58,10 @@ def run_generate():
 
 root = tk.Tk()
 root.title("Vyapar to Tally XML Generator")
-root.geometry("760x560")
-root.minsize(720, 520)
+root.geometry("760x470")
+root.minsize(720, 440)
 
 input_var = tk.StringVar()
-items_input_var = tk.StringVar()
 output_var = tk.StringVar()
 max_age_var = tk.StringVar(value=str(MAX_DATA_AGE_DAYS))
 
@@ -85,7 +73,6 @@ receipts_var = tk.BooleanVar(value=True)
 purchases_var = tk.BooleanVar(value=True)
 payments_var = tk.BooleanVar(value=True)
 notes_var = tk.BooleanVar(value=True)
-allow_accounting_only_sales_var = tk.BooleanVar(value=False)
 
 content = ttk.Frame(root, padding=20)
 content.pack(fill="both", expand=True)
@@ -95,25 +82,21 @@ ttk.Label(content, text="Vyapar Daybook Excel").grid(row=0, column=0, sticky="w"
 ttk.Entry(content, textvariable=input_var).grid(row=0, column=1, sticky="ew", padx=(12, 8), pady=(0, 6))
 ttk.Button(content, text="Browse", command=browse_input).grid(row=0, column=2, sticky="ew", pady=(0, 6))
 
-ttk.Label(content, text="Item Details Excel").grid(row=1, column=0, sticky="w", pady=6)
-ttk.Entry(content, textvariable=items_input_var).grid(row=1, column=1, sticky="ew", padx=(12, 8), pady=6)
-ttk.Button(content, text="Browse", command=browse_items_input).grid(row=1, column=2, sticky="ew", pady=6)
+ttk.Label(content, text="Output Folder").grid(row=1, column=0, sticky="w", pady=6)
+ttk.Entry(content, textvariable=output_var).grid(row=1, column=1, sticky="ew", padx=(12, 8), pady=6)
+ttk.Button(content, text="Browse", command=browse_output).grid(row=1, column=2, sticky="ew", pady=6)
 
-ttk.Label(content, text="Output Folder").grid(row=2, column=0, sticky="w", pady=6)
-ttk.Entry(content, textvariable=output_var).grid(row=2, column=1, sticky="ew", padx=(12, 8), pady=6)
-ttk.Button(content, text="Browse", command=browse_output).grid(row=2, column=2, sticky="ew", pady=6)
-
-ttk.Separator(content).grid(row=3, column=0, columnspan=3, sticky="ew", pady=14)
+ttk.Separator(content).grid(row=2, column=0, columnspan=3, sticky="ew", pady=14)
 
 xml_frame = ttk.LabelFrame(content, text="XML Files", padding=12)
-xml_frame.grid(row=4, column=0, columnspan=3, sticky="ew")
+xml_frame.grid(row=3, column=0, columnspan=3, sticky="ew")
 xml_frame.columnconfigure((0, 1, 2), weight=1)
 ttk.Checkbutton(xml_frame, text="Masters", variable=masters_var).grid(row=0, column=0, sticky="w")
 ttk.Checkbutton(xml_frame, text="Vouchers", variable=vouchers_var).grid(row=0, column=1, sticky="w")
 ttk.Checkbutton(xml_frame, text="Combined", variable=combined_var).grid(row=0, column=2, sticky="w")
 
 voucher_frame = ttk.LabelFrame(content, text="Voucher Types", padding=12)
-voucher_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(14, 0))
+voucher_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(14, 0))
 voucher_frame.columnconfigure((0, 1, 2), weight=1)
 ttk.Checkbutton(voucher_frame, text="Sales", variable=sales_var).grid(row=0, column=0, sticky="w")
 ttk.Checkbutton(voucher_frame, text="Receipts", variable=receipts_var).grid(row=0, column=1, sticky="w")
@@ -122,18 +105,13 @@ ttk.Checkbutton(voucher_frame, text="Payments", variable=payments_var).grid(row=
 ttk.Checkbutton(voucher_frame, text="Credit/Debit Notes", variable=notes_var).grid(row=1, column=1, sticky="w", pady=(8, 0))
 
 rules_frame = ttk.LabelFrame(content, text="Import Rules", padding=12)
-rules_frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(14, 0))
+rules_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(14, 0))
 rules_frame.columnconfigure(1, weight=1)
 ttk.Label(rules_frame, text="Allowed data age in days").grid(row=0, column=0, sticky="w")
 ttk.Entry(rules_frame, textvariable=max_age_var, width=8).grid(row=0, column=1, sticky="w", padx=(12, 0))
-ttk.Checkbutton(
-    rules_frame,
-    text="Allow ledger-only sales when Item Details sheet is missing",
-    variable=allow_accounting_only_sales_var,
-).grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
 ttk.Button(content, text="Generate XML", command=run_generate).grid(
-    row=7,
+    row=6,
     column=0,
     columnspan=3,
     pady=(24, 0),
