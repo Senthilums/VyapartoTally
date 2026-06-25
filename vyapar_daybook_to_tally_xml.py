@@ -641,43 +641,55 @@ def create_debit_note(request_data: ET.Element, row: DaybookRow) -> None:
     ledger_entry(voucher, LEDGERS["purchase"], row.total, "No")
 
 
-def build_vouchers(rows: List[DaybookRow], items: List[ItemRow], output: Path) -> Tuple[ET.Element, Dict[str, int]]:
+def build_vouchers(
+    rows: List[DaybookRow],
+    items: List[ItemRow],
+    output: Path,
+    included_voucher_types: Optional[Iterable[str]] = None,
+) -> Tuple[ET.Element, Dict[str, int]]:
     envelope, request_data = make_envelope("Vouchers")
     items_by_ref: Dict[str, List[ItemRow]] = defaultdict(list)
     for i in items:
         items_by_ref[i.ref_no].append(i)
 
+    included = {clean_header(kind) for kind in included_voucher_types} if included_voucher_types else None
+
+    def is_included(kind: str) -> bool:
+        return included is None or kind in included
+
     stats = defaultdict(int)
     skipped = []
     for row in rows:
         if row.kind == "sales":
-            if not row.ref_no:
-                skipped.append((row, "Sales row has no ref no"))
-                continue
-            create_sales(request_data, row, items_by_ref)
-            stats["sales"] += 1
-            if row.money_in > 0:
+            if is_included("sales"):
+                if not row.ref_no:
+                    skipped.append((row, "Sales row has no ref no"))
+                    continue
+                create_sales(request_data, row, items_by_ref)
+                stats["sales"] += 1
+            if row.money_in > 0 and is_included("receipt"):
                 create_receipt(request_data, row)
                 stats["receipts_from_sales"] += 1
         elif row.kind == "purchase":
-            create_purchase(request_data, row, items_by_ref)
-            stats["purchase"] += 1
-            if row.money_out > 0:
+            if is_included("purchase"):
+                create_purchase(request_data, row, items_by_ref)
+                stats["purchase"] += 1
+            if row.money_out > 0 and is_included("payment"):
                 create_payment(request_data, row)
                 stats["payments_from_purchase"] += 1
-        elif row.kind == "receipt":
+        elif row.kind == "receipt" and is_included("receipt"):
             create_receipt(request_data, row, prefix="RCPT-DIRECT")
             stats["direct_receipts"] += 1
-        elif row.kind == "payment":
+        elif row.kind == "payment" and is_included("payment"):
             create_payment(request_data, row, prefix="PYMT-DIRECT")
             stats["direct_payments"] += 1
-        elif row.kind == "credit_note":
+        elif row.kind == "credit_note" and is_included("credit_note"):
             create_credit_note(request_data, row)
             stats["credit_notes"] += 1
-        elif row.kind == "debit_note":
+        elif row.kind == "debit_note" and is_included("debit_note"):
             create_debit_note(request_data, row)
             stats["debit_notes"] += 1
-        else:
+        elif row.kind == "unknown":
             skipped.append((row, "Unknown row type"))
 
     for row, reason in skipped:
@@ -710,8 +722,13 @@ def main(
     output_dir="output",
     allow_accounting_only_sales=False,
     max_data_age_days=MAX_DATA_AGE_DAYS,
+    generate_masters=True,
+    generate_vouchers=True,
+    generate_combined=True,
+    included_voucher_types=None,
 ):
     global COMPANY_NAME
+    cli_mode = input_file is None
     if input_file is None:
         parser = argparse.ArgumentParser(description="Generate Tally import XML from Vyapar Day Book Excel")
         parser.add_argument("--input", required=True, help="Vyapar Daybook Excel file path")
@@ -772,18 +789,39 @@ def main(
         validate_sales_item_details(rows, items, REQUIRE_ITEM_DETAILS_FOR_SALES and not allow_accounting_only_sales)
     except ValueError as exc:
         LOGGER.error(str(exc))
-        sys.exit(1)
+        if cli_mode:
+            sys.exit(1)
+        raise
 
-    master_env, master_stats = build_masters(rows, items, masters_path)
-    voucher_env, voucher_stats = build_vouchers(rows, items, vouchers_path)
-    combine_xml(master_env, voucher_env, combined_path)
+    master_env = voucher_env = None
+    master_stats = {}
+    voucher_stats = {}
+    created_files = []
 
-    LOGGER.info("Created masters XML: %s", masters_path)
-    LOGGER.info("Created vouchers XML: %s", vouchers_path)
-    LOGGER.info("Created combined XML: %s", combined_path)
+    if generate_masters:
+        master_env, master_stats = build_masters(rows, items, masters_path)
+        created_files.append(masters_path)
+        LOGGER.info("Created masters XML: %s", masters_path)
+    if generate_vouchers:
+        voucher_env, voucher_stats = build_vouchers(rows, items, vouchers_path, included_voucher_types)
+        created_files.append(vouchers_path)
+        LOGGER.info("Created vouchers XML: %s", vouchers_path)
+    if generate_combined and master_env is not None and voucher_env is not None:
+        combined_path = Path(output_file) if output_file else combined_path
+        combine_xml(master_env, voucher_env, combined_path)
+        created_files.append(combined_path)
+        LOGGER.info("Created combined XML: %s", combined_path)
+
     LOGGER.info("Master stats: %s", master_stats)
     LOGGER.info("Voucher stats: %s", voucher_stats)
-    LOGGER.info("Recommended import order: 01_masters.xml first, then 02_vouchers.xml")
+    if generate_masters and generate_vouchers:
+        LOGGER.info("Recommended import order: 01_masters.xml first, then 02_vouchers.xml")
+
+    return {
+        "files": [str(path) for path in created_files],
+        "master_stats": master_stats,
+        "voucher_stats": voucher_stats,
+    }
 
 
 if __name__ == "__main__":
