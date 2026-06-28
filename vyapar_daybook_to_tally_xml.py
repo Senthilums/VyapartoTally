@@ -446,11 +446,22 @@ def create_unit_message(request_data: ET.Element, unit: str) -> None:
     add_text(unit_el, "DECIMALPLACES", " 2")
 
 
+def create_stock_group_message(request_data: ET.Element, category: str) -> None:
+    if not category:
+        return
+    msg = ET.SubElement(request_data, "TALLYMESSAGE")
+    group = ET.SubElement(msg, "STOCKGROUP", {"NAME": category, "ACTION": "Create"})
+    add_text(group, "NAME", category)
+    add_text(group, "PARENT", PARENTS["stock_item"])
+    add_text(group, "ISSUBLEDGER", "No")
+    add_text(group, "ISADDABLE", "No")
+
+
 def create_stock_item_message(request_data: ET.Element, item: ItemRow) -> None:
     msg = ET.SubElement(request_data, "TALLYMESSAGE")
     stock = ET.SubElement(msg, "STOCKITEM", {"NAME": item.item_name, "ACTION": "Create"})
     add_text(stock, "NAME", item.item_name)
-    add_text(stock, "PARENT", PARENTS["stock_item"])
+    add_text(stock, "PARENT", item.category or PARENTS["stock_item"])
     add_text(stock, "BASEUNITS", item.unit or "UNT")
     add_text(stock, "GSTAPPLICABLE", "Applicable")
     add_text(stock, "GSTTYPEOFSUPPLY", "Goods")
@@ -468,6 +479,7 @@ def build_masters(rows: List[DaybookRow], items: List[ItemRow], output: Path) ->
     purchase_parties = {r.party for r in rows if r.kind in {"purchase", "debit_note"} and r.party}
     expense_parties = {r.party for r in rows if r.kind == "payment" and r.party}
     units = {i.unit for i in items if i.unit}
+    stock_groups = {i.category for i in items if i.category}
     stock_by_name: Dict[str, ItemRow] = {}
     for i in items:
         stock_by_name.setdefault(i.item_name, i)
@@ -482,6 +494,8 @@ def build_masters(rows: List[DaybookRow], items: List[ItemRow], output: Path) ->
             create_ledger_message(request_data, party, PARENTS["expense"], "No")
     for unit in sorted(units):
         create_unit_message(request_data, unit)
+    for category in sorted(stock_groups):
+        create_stock_group_message(request_data, category)
     for item in sorted(stock_by_name.values(), key=lambda x: x.item_name):
         create_stock_item_message(request_data, item)
 
@@ -490,6 +504,7 @@ def build_masters(rows: List[DaybookRow], items: List[ItemRow], output: Path) ->
         "supplier_ledgers": len(purchase_parties),
         "expense_ledgers": len(expense_parties),
         "units": len(units),
+        "stock_groups": len(stock_groups),
         "stock_items": len(stock_by_name),
     }
     write_xml(envelope, output)
